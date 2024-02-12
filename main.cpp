@@ -169,14 +169,23 @@ public:
         size_t blocksUsed = std::ceil(sizeUsed / (double) blockSize);
         std::cout << "blocksUsed: " << blocksUsed << std::endl;
         // Mark blocks as used
-        for (size_t i = blockIndex; i < blocksUsed; i++) {
-            setBlockUsed(i, true);
+        for (size_t i = 0; i < blocksUsed; i++) {
+            setBlockUsed(blockIndex + i, true);
+            std::cout << "Marking block as used " << (blockIndex + i) << std::endl;
         }
         return reinterpret_cast<void*>(addr);
     }
 
     virtual void free(void* ptr, size_t size) override {
-        
+        // Mark blocks as used
+        size_t relative_addr = reinterpret_cast<size_t>(ptr) - reinterpret_cast<size_t>(buffer);
+        size_t blockIndex = relative_addr / blockSize;
+
+        size_t blocksUsed = std::ceil(size / (double) blockSize);
+        for (size_t i = blockIndex; i < blocksUsed; i++) {
+            setBlockUsed(i, false);
+            std::cout << "Freeing block " << blockIndex << std::endl;
+        }
     }
 
     virtual void* resize(void* ptr, size_t oldSize, size_t newSize) override {
