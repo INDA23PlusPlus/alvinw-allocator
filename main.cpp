@@ -138,14 +138,29 @@ public:
         }
     }
 
-    virtual size_t setBlockUsed(size_t blockIndex, bool used) {
-        // Find next free block
+    virtual size_t setBlockUsed(size_t blockIndex) {
         size_t byteIndex = blockIndex / 8;
         size_t bitIndex = blockIndex % 8;
         uint8_t byte = mask.at(byteIndex);
         // Set the bit
         byte = byte | (1 << bitIndex);
         mask[byteIndex] = byte;
+    }
+
+    virtual size_t setBlockUnused(size_t blockIndex) {
+        size_t byteIndex = blockIndex / 8;
+        size_t bitIndex = blockIndex % 8;
+        uint8_t byte = mask.at(byteIndex);
+        // Unset the bit
+        byte = byte & ~(1 << bitIndex);
+        mask[byteIndex] = byte;
+    }
+
+    virtual bool isBlockUsed(size_t blockIndex) {
+        size_t byteIndex = blockIndex / 8;
+        size_t bitIndex = blockIndex % 8;
+        uint8_t byte = mask.at(byteIndex);
+        return (byte >> bitIndex) & 1;
     }
 
     virtual void* alloc(size_t size, size_t alignment) override {
@@ -170,7 +185,7 @@ public:
         std::cout << "blocksUsed: " << blocksUsed << std::endl;
         // Mark blocks as used
         for (size_t i = 0; i < blocksUsed; i++) {
-            setBlockUsed(blockIndex + i, true);
+            setBlockUsed(blockIndex + i);
             std::cout << "Marking block as used " << (blockIndex + i) << std::endl;
         }
         return reinterpret_cast<void*>(addr);
@@ -182,14 +197,43 @@ public:
         size_t blockIndex = relative_addr / blockSize;
 
         size_t blocksUsed = std::ceil(size / (double) blockSize);
-        for (size_t i = blockIndex; i < blocksUsed; i++) {
-            setBlockUsed(i, false);
-            std::cout << "Freeing block " << blockIndex << std::endl;
+        std::cout << "Freeing from " << blockIndex << " and " << blocksUsed << " blocks." << std::endl;
+        for (size_t i = 0; i < blocksUsed; i++) {
+            setBlockUnused(blockIndex + i);
+            std::cout << "Freeing block " << (blockIndex + i) << std::endl;
         }
     }
 
     virtual void* resize(void* ptr, size_t oldSize, size_t newSize) override {
+        size_t relative_addr = reinterpret_cast<size_t>(ptr) - reinterpret_cast<size_t>(buffer);
+        size_t startBlockIndex = relative_addr / blockSize;
+
+        size_t oldBlocksUsed = std::ceil(oldSize / (double) blockSize);
+        size_t newBlocksUsed = std::ceil(newSize / (double) blockSize);
+
+        size_t diff = newBlocksUsed - oldBlocksUsed;
+        for (size_t i = 0; i < diff; i++) {
+            size_t blockIndex = startBlockIndex + oldBlocksUsed + i;
+            if (isBlockUsed(blockIndex)) {
+                std::cout << "Resize rejected due to block " << blockIndex << std::endl;
+                return nullptr;
+            }
+        }
         
+        // Let's mark those new blocks as allocated
+        for (size_t i = 0; i < diff; i++) {
+            size_t blockIndex = startBlockIndex + oldBlocksUsed + i;
+            setBlockUsed(blockIndex);
+            std::cout << "Resizing by marking block " << blockIndex << " as used." << std::endl;
+        }
+    }
+
+    void print() {
+        std::cout << "PoolAllocator " << blockSize << " bytes per block: [";
+        for (size_t blockIndex = 0; blockIndex < (totalSize / blockSize); blockIndex++) {
+            std::cout << (isBlockUsed(blockIndex) ? "#" : "_");
+        }
+        std::cout << "]" << std::endl;
     }
 };
 
@@ -199,16 +243,29 @@ int test() {
     // LinearAllocator allocator(100);
     PoolAllocator allocator(32, 8);
 
+    allocator.print();
+
     uint8_t* b1 = static_cast<uint8_t*>(allocator.alloc(1, 1));
+    allocator.print();
     int arrayByteSize = 5 * sizeof(int);
     int* array = static_cast<int*>(allocator.alloc(arrayByteSize, 4));
+    allocator.print();
 
-    allocator.resize(array, 5 * sizeof(int), 10 * sizeof(int));
+    uint8_t* btmp = static_cast<uint8_t*>(allocator.alloc(1, 1));
+    allocator.print();
 
     uint8_t* b2 = static_cast<uint8_t*>(allocator.alloc(1, 1));
+    allocator.print();
+
+    allocator.free(btmp, 1);
+    allocator.print();
+
+    allocator.resize(array, arrayByteSize, 10 * sizeof(int));
+    arrayByteSize = 10 * sizeof(int);
+    allocator.print();
 
     *b1 = (uint8_t) 5;
-    *b1 = (uint8_t) 50;
+    *b2 = (uint8_t) 50;
 
     if (!array) {
         std::cerr << "Memory allocation failed." << std::endl;
@@ -228,7 +285,11 @@ int test() {
     std::cout << std::endl;
 
     allocator.free(b1, 1);
+    allocator.print();
     allocator.free(array, arrayByteSize);
+    allocator.print();
+    allocator.free(b2, 1);
+    allocator.print();
 
     return 0;
 }
